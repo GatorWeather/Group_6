@@ -29,7 +29,7 @@ async function getWeatherData(city){
     let apiUrl;
     city = city.trim();
     //Edit this api call here to get different data
-    //If city is not a number use zip code, else use name lookup
+    //If the city variable is not strictly a number use search by city name, else use ZIP lookup.
     if (isNaN(city)){
         apiUrl = `https://api.openweathermap.org/data/2.5/weather?q=${city}&units=imperial&appid=${apiKey}`;
     }
