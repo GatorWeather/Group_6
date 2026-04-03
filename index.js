@@ -13,7 +13,6 @@ const historyContainer = document.querySelector(".searchHistory");
 
 
 cityInput.addEventListener("input", async () => {
-    // hide history when typing starts
     historyContainer.innerHTML = "";
     const query = cityInput.value;
 
@@ -22,51 +21,16 @@ cityInput.addEventListener("input", async () => {
         return;
     }
 
-    const response = await fetch(
-        `https://api.openweathermap.org/geo/1.0/direct?q=${query}&limit=5&appid=${apiKey}`
-    );
-
-    const cities = await response.json();
-
-    suggestions.innerHTML = "";
-
-    cities.forEach(city => {
-
-        if (cityInput.value.length > 0) {
-            searchBox.classList.add("hasText");
-        } else {
-            searchBox.classList.remove("hasText");
-        }
-
-        const div = document.createElement("div");
-        div.classList.add("suggestionItem");
-        div.textContent = `${city.name}, ${city.state || ""} ${city.country}`;
-
-        div.addEventListener("click", async () => {
-
-            try {
-                cityInput.value = div.textContent;
-                suggestions.innerHTML = "";
-                cityInput.blur();
-                
-                saveSearchHistory(city.name);
-
-                const weatherData = await getWeatherDataByCoords(city.lat, city.lon);
-                displayWeatherInfo(weatherData);
-                const lat = weatherData.coord.lat;
-                const lon = weatherData.coord.lon;
-                const forecastData = await getForecastData(lat, lon);
-                display7DayForecast(forecastData);
-                const hourlyData = await getHourlyForecastData(lat, lon);
-                displayHourlyForecast(hourlyData);
-            } catch (error) {
-                console.error(error);
-                displayError("Could not fetch weather data for the selected city.");
-            }
-        });
-
-        suggestions.appendChild(div);
-    });
+    try {
+        const response = await fetch(`https://api.openweathermap.org/geo/1.0/direct?q=${query}&limit=5&appid=${apiKey}`);
+        const cities = await response.json();
+        displayCitySuggestions(cities);
+    } 
+    
+    catch (error) {
+        console.error(error)
+    }
+    
 
 });
 
@@ -97,18 +61,12 @@ weatherForm.addEventListener("submit", async event => {
         // zip code search
     if (!isNaN(city)) {
         if (city.length !== 5) throw new Error("Invalid ZIP code, enter 5 digits.");
-        saveSearchHistory(city);
         const zipGeoResponse = await fetch(
             `https://api.openweathermap.org/geo/1.0/zip?zip=${city},US&appid=${apiKey}`
         );
         if (!zipGeoResponse.ok) throw new Error("Invalid ZIP code or not found.");
         const zipData = await zipGeoResponse.json();
-        const weatherData = await getWeatherDataByCoords(zipData.lat, zipData.lon);
-        displayWeatherInfo(weatherData);
-        const forecastData = await getForecastData(weatherData.coord.lat, weatherData.coord.lon);
-        display7DayForecast(forecastData);
-        const hourlyData = await getHourlyForecastData(weatherData.coord.lat, weatherData.coord.lon);
-        displayHourlyForecast(hourlyData);
+        fetchAndDisplayAllWeather(zipData.lat, zipData.lon, zipData.name);
         return;
     }
 
@@ -129,36 +87,14 @@ weatherForm.addEventListener("submit", async event => {
         );
 
         if (unique.length === 1) {
-            saveSearchHistory(matches[0].name)
-            const weatherData = await getWeatherDataByCoords(matches[0].lat, matches[0].lon);
-            displayWeatherInfo(weatherData);
-            const forecastData = await getForecastData(weatherData.coord.lat, weatherData.coord.lon);
-            display7DayForecast(forecastData);
-            const hourlyData = await getHourlyForecastData(weatherData.coord.lat, weatherData.coord.lon);
-            displayHourlyForecast(hourlyData);
+            fetchAndDisplayAllWeather(matches[0].lat, matches[0].lon, matches[0].name);
         } else {
             // show disambiguation list
-            unique.forEach(match => {
-                const div = document.createElement("div");
-                div.classList.add("suggestionItem");
-                div.textContent = `${match.name}, ${match.state || ""} ${match.country}`;
-                div.addEventListener("click", () => {
-                    cityInput.value = div.textContent;
-                    suggestions.innerHTML = "";
-                    getWeatherDataByCoords(match.lat, match.lon)
-                        .then(weatherData => {
-                            displayWeatherInfo(weatherData);
-                            return getForecastData(weatherData.coord.lat, weatherData.coord.lon)
-                                .then(display7DayForecast);
-                        })
-                        .catch(displayError);
-                });
-                suggestions.appendChild(div);
-            });
+            displayCitySuggestions(unique);
         }
     } catch (error) {
         console.error(error);
-        displayError(error);
+        displayError(error.message);
     }
 });
 
@@ -225,13 +161,14 @@ async function showGeolocationWeather(position) {
 
 // ----- Functions for user seach history -----
 
-function saveSearchHistory(city) {
+function saveSearchHistory(name, lat, lon) {
     let searchHistory = JSON.parse(sessionStorage.getItem("searchHistory")) || [];
-    // remove duplicates
-    searchHistory = searchHistory.filter(item => item !== city);
 
-    searchHistory.unshift(city);
+    const newEntry = { name, lat, lon };
 
+    searchHistory = searchHistory.filter(item => item.name !== name);
+
+    searchHistory.unshift(newEntry);
     searchHistory = searchHistory.slice(0, 5);
 
     sessionStorage.setItem("searchHistory", JSON.stringify(searchHistory));
@@ -252,15 +189,15 @@ function displaySearchHistory() {
         return;
     }
 
-    searchHistory.forEach (city => {
+    searchHistory.forEach (item => {
         const div = document.createElement("div");
         div.classList.add("searchHistoryItem");
-        div.textContent = city;
+        div.textContent = item.name;
 
         div.addEventListener("click", () => {
-            cityInput.value = city;
+            cityInput.value = item.name;
             historyContainer.innerHTML = "";
-            weatherForm.dispatchEvent(new Event("submit", { cancelable: true, bubbles: true }));
+            fetchAndDisplayAllWeather(item.lat, item.lon, item.name);
         });
         historyContainer.appendChild(div);
     }) ;
@@ -604,3 +541,45 @@ function getForecastEmoji(code, isDay = true){
     if (code === 95 || code === 96 || code === 99) return "⛈️";
         return "❓";
 };
+
+async function fetchAndDisplayAllWeather(lat, lon, cityName) {
+    try {
+        saveSearchHistory(cityName, lat, lon);
+
+        const [weatherData, forecastData, hourlyData] = await Promise.all([
+            getWeatherDataByCoords(lat, lon),
+            getForecastData(lat, lon),
+            getHourlyForecastData(lat, lon)
+        ]);
+
+        displayWeatherInfo(weatherData);
+        display7DayForecast(forecastData);
+        displayHourlyForecast(hourlyData);
+
+    } catch (error) {
+        console.error(error);
+        displayError("fetchAndDisplayAllWeather failed.");
+    }
+}
+
+function displayCitySuggestions(cities) {
+    suggestions.innerHTML = "";
+
+    cities.forEach(city => {
+        const div = document.createElement("div");
+        div.classList.add("suggestionItem");
+        
+        const locationName = `${city.name}, ${city.state || ""} ${city.country}`;
+        div.textContent = locationName;
+
+        div.addEventListener("click", () => {
+            cityInput.value = locationName;
+            suggestions.innerHTML = "";
+            cityInput.blur();
+            
+            fetchAndDisplayAllWeather(city.lat, city.lon, city.name);
+        });
+
+        suggestions.appendChild(div);
+    });
+}
